@@ -1,0 +1,44 @@
+# Dependencies and generated files
+node_modules/
+/__*__/
+/dist/
+/.dist-build/
+/coverage/
+*.tsbuildinfo
+npm-debug.log*
+
+# Local application data
+/data/
+/backups/
+/uploads/
+/exports/
+/logs/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# Research files and exports
+*.[pP][dD][fF]
+literature-review*.json
+mapo-review*.json
+paper-comparison*.csv
+related_work*.bib
+related_work*.tex
+contribution_positioning*.tex
+/*.zip
+/*.tar.gz
+
+# Local credentials and machine-specific files
+.env
+.env.*
+!.env.example
+.npmrc
+*.pem
+*.key
+*.p12
+*.pfx
+.DS_Store
+Thumbs.db
