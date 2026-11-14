@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import { z } from "zod";
 
 export const userName = z.string().trim().min(2).max(40).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/, "Use 2–40 letters, numbers, dots, hyphens, or underscores.");
-export const passwordRule = z.string().min(12, "Use a password with at least 12 characters.").max(200);
+export const passwordRule = z.string().min(1, "Enter a password.").max(200);
 export const sessionAge = 14 * 24 * 60 * 60 * 1000;
 const derivation = promisify(scrypt);
 const parameters = { N: 65536, r: 8, p: 2, maxmem: 96 * 1024 * 1024 };

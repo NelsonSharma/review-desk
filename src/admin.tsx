@@ -120,8 +120,8 @@ function AccountForm({ user, onClose, onSaved }: { user?: ManagedUser; onClose: 
     <form className="dialog-form" onSubmit={submit}>
       <div className="dialog-scroll form-content form-grid">
         {!user && <Field label="Username" wide><input name="username" minLength={2} maxLength={40} required autoComplete="off" /></Field>}
-        <Field label={user ? "New password" : "Password"} wide help={user ? "Leave blank to keep the current password." : "Use at least 12 characters."}>
-          <input name="password" type="password" required={!user} minLength={12} maxLength={200} autoComplete="new-password" /></Field>
+        <Field label={user ? "New password" : "Password"} wide help={user ? "Leave blank to keep the current password." : "Enter a password."}>
+          <input name="password" type="password" required={!user} maxLength={200} autoComplete="new-password" /></Field>
         <Field label="Role" wide help={roles[role].detail}><select value={role} onChange={event => setRole(event.target.value as UserRole)}>
           {userRoles.map(role => <option key={role} value={role}>{roles[role].name}</option>)}</select></Field>
         {user && <label className="check-option field full"><input type="checkbox" checked={disabled} onChange={event => setDisabled(event.target.checked)} /> Disable this account</label>}

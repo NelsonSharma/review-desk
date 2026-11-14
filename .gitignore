@@ -6,6 +6,8 @@ node_modules/
 /coverage/
 *.tsbuildinfo
 npm-debug.log*
+*.exe
+*.service
 
 # Local application data
 /data/

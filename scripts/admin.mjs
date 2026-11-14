@@ -34,7 +34,7 @@ try {
     try { return await prompt.question(""); }
     finally { hidden = false; process.stdout.write("\n"); }
   }
-  const password = passwordRule.parse(unattended || await askPassword("Password (12+ characters): "));
+  const password = passwordRule.parse(unattended || await askPassword("Password: "));
   if (!unattended && password !== await askPassword("Confirm password: ")) throw new Error("The passwords do not match.");
   const hash = await hashPassword(password);
   if (admin) {

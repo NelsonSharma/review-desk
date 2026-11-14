@@ -4,16 +4,43 @@ Review Desk is a self-hosted literature review workspace. Collect papers and PDF
 
 ## Quick start
 
-Install [Node.js 24 LTS](https://nodejs.org/en/download) (24.14 or later). From the cloned or unzipped project folder, run:
+Install [Node.js 24 LTS](https://nodejs.org/en/download) (24.14 or later). From the cloned or unzipped project folder, 
 
-```sh
-npm ci --include=dev --include=optional --ignore-scripts
-npm run build
-npm run admin -- create
-npm start
-```
+* run one of these:
 
-Open [http://127.0.0.1:8080/](http://127.0.0.1:8080/), sign in with the owner account you created, and select **New review**. Run the owner creation command once per database. Use `npm run admin -- reset` to reset the existing owner's password.
+    ```sh
+    npm ci --omit=dev
+    ```
+    or
+    ```sh
+    npm ci --include=dev
+    ```
+    or
+    ```sh
+    npm ci --include=dev --include=optional --ignore-scripts
+    ```
+
+* do build
+
+    ```sh
+    npm run build
+    ```
+
+* create admin account
+
+    ```sh
+    npm run admin -- create
+    ```
+
+* start the app
+
+    ```sh
+    npm start
+    ```
+
+Open [http://127.0.0.1:8080/](http://127.0.0.1:8080/), sign in with the owner account you created.
+
+Run the owner creation command once per database. Use `npm run admin -- reset` to reset the existing owner's password.
 
 The dependency install includes esbuild's platform binary. The browser build uses that binary with dependency install scripts disabled. To change the server port, run `npm start -- --port 8090`. For shared access, use the HTTPS setup below.
 
@@ -41,7 +68,7 @@ Review Desk provides its own HTTP server. To expose it through Nginx on the same
 LITERATURE_TRUST_PROXY=1 LITERATURE_SECURE_COOKIES=1 npm start
 ```
 
-Add [the sample location block](deploy/nginx-location.conf) to your existing HTTPS virtual host. Serve it at the root of its hostname, such as `https://literature.example.com/`. Check the configuration with `nginx -t` before reloading Nginx.
+Add [the sample location block](deploy/nginx-location.conf) to your existing HTTPS virtual host. Serve it at the root of its hostname, such as `https://review.example.com/`. Check the configuration with `nginx -t` before reloading Nginx.
 
 ## Storage, backup, and migration
 

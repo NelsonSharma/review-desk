@@ -651,3 +651,7 @@ body { background: var(--paper-background); }
   .review-cards { grid-template-columns: minmax(0,1fr); }
   .dashboard-bar .brand small { display: none; }
 }
+#hero-title, .dashboard-hero h1{
+  font-family: "DM Sans", sans-serif;
+  font-weight: 700;
+}
