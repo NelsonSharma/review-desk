@@ -1,5 +1,5 @@
 import { createRoot } from "react-dom/client";
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, BookOpen, FileUp, LibraryBig, LockKeyhole, Plus, Settings2 } from "lucide-react";
 import { api, ApiError, errorMessage, setSession, type OpenReview, type SiteState } from "./client";
 import { Admin } from "./admin";
@@ -24,6 +24,16 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [draftDirty, setDraftDirty] = useState(false);
 
+  const lastLocation = useRef(location.href);
+  const routeRef = useRef(route);
+  routeRef.current = route;
+  const dirtyRef = useRef(false);
+  const onDirty = useCallback((dirty: boolean) => {
+    dirtyRef.current = dirty;
+    lastLocation.current = location.href;
+    setDraftDirty(dirty);
+  }, []);
+
   async function refresh() {
     const current = await api<SiteState>("/state");
     setSession(current.csrf);
@@ -32,7 +42,15 @@ function App() {
 
   useEffect(() => {
     refresh().catch(error => setLoadError(errorMessage(error)));
-    const onRoute = () => setRoute(readRoute());
+    const onRoute = () => {
+      const next = readRoute();
+      if ((next.id !== routeRef.current.id || next.admin !== routeRef.current.admin) && dirtyRef.current && !window.confirm("Leave this page and discard unsaved changes?")) {
+        history.pushState(null, "", lastLocation.current);
+        return;
+      }
+      if (!dirtyRef.current || next.id !== routeRef.current.id || next.admin !== routeRef.current.admin) lastLocation.current = location.href;
+      setRoute(next);
+    };
     window.addEventListener("popstate", onRoute);
     return () => window.removeEventListener("popstate", onRoute);
   }, []);
@@ -51,7 +69,7 @@ function App() {
   }, [route.id, route.admin, state?.user?.id, Boolean(state)]);
 
   function navigate(id = "", admin = false, confirmed = false) {
-    if (!confirmed && draftDirty && !window.confirm("Leave this review and discard unsaved draft changes?")) return;
+    if (!confirmed && draftDirty && !window.confirm("Leave this review and discard unsaved changes?")) return;
     setOpened(undefined);
     setReviewError("");
     const next = new URL(location.href);
@@ -65,7 +83,7 @@ function App() {
   }
 
   async function logout() {
-    if (draftDirty && !window.confirm("Sign out and discard unsaved draft changes?")) return;
+    if (draftDirty && !window.confirm("Sign out and discard unsaved changes?")) return;
     setBusy(true);
     try {
       await api("/logout", { method: "POST" });
@@ -93,7 +111,7 @@ function App() {
       : route.id && opened?.info.id === route.id ? <Workspace key={opened.info.id + ":" + (state.user?.id ?? "guest")}
         initial={opened.review} initialRevision={opened.revision} initialInfo={opened.info} user={state.user}
         onInfo={onInfo} onReviews={() => navigate()} accountControls={<>{adminButton}{controls}</>}
-        onLogin={() => setDialog("login")} onDraftDirty={setDraftDirty} />
+        onLogin={() => setDialog("login")} onDraftDirty={onDirty} />
       : route.id ? <main className="gate"><BookOpen /><h1>{reviewError ? "Review unavailable" : "Opening review"}</h1>
         <p>{reviewError || "Loading the papers and review notes…"}</p><div className="header-actions">{navBack}{controls}</div></main>
       : <Dashboard state={state} controls={<>{adminButton}{controls}</>} onOpen={id => navigate(id)}

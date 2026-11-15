@@ -37,7 +37,11 @@ test("SQLite workspace serves papers, PDFs, and comments with server-side role c
   const db = openStorage(join(work, "data"));
   const password = "test-case-password";
   db.prepare("INSERT INTO users(username,password_hash,role) VALUES (?,?,?)").run("owner", await hashPassword(password), "admin");
-  const server = makeApp(db).listen(0, "127.0.0.1");
+  const metadataRequests = [];
+  const server = makeApp(db, { metadataSearch: async input => {
+    metadataRequests.push(input);
+    return { results: [], warnings: [] };
+  } }).listen(0, "127.0.0.1");
   await once(server, "listening");
   const origin = "http://127.0.0.1:" + server.address().port;
   t.after(async () => { await new Promise(resolve => server.close(resolve)); db.close(); await rm(work, { recursive: true, force: true }); });
@@ -67,7 +71,13 @@ test("SQLite workspace serves papers, PDFs, and comments with server-side role c
   const visitor = client(), owner = client(), reader = client(), reviewer = client(), editor = client();
   assert.deepEqual((await visitor("/state")).result.reviews, []);
   await owner("/login", { method: "POST", data: { username: "owner", password }, originHeader: "https://external.invalid", status: 403 });
+  await visitor("/metadata/search", { method: "POST", data: { query: "a paper", sources: ["crossref"] }, status: 401 });
   await owner("/login", { method: "POST", data: { username: "owner", password } });
+  await owner("/metadata/search", { method: "POST", data: { query: "a paper", sources: [] }, status: 400 });
+  await owner("/metadata/search", { method: "POST", data: { query: "a paper", sources: ["https://evil.invalid"] }, status: 400 });
+  await owner("/metadata/search", { method: "POST", data: { query: "a paper", sources: ["crossref"] } });
+  assert.deepEqual(metadataRequests, [{ query: "a paper", sources: ["crossref"] }]);
+  await owner("/metadata/search", { method: "POST", data: { query: "another", sources: ["arxiv"] }, status: 429 });
   const created = (await owner("/reviews", { method: "POST", data: { title: "Study design", description: "Compare research methods" }, status: 201 })).result.review;
   const path = "/reviews/" + created.id;
   await visitor(path, { status: 404 });
@@ -80,6 +90,7 @@ test("SQLite workspace serves papers, PDFs, and comments with server-side role c
   await reader("/login", { method: "POST", data: { username: "viewer", password } });
   await reviewer("/login", { method: "POST", data: { username: "commenter", password } });
   await editor("/login", { method: "POST", data: { username: "editor", password } });
+  await reader("/metadata/search", { method: "POST", data: { query: "a paper", sources: ["crossref"] }, status: 403 });
   const { review } = (await reader(path)).result;
   const field = { id: "design", label: "Study design", description: "Describe the design", paper: true, profile: true };
   const relation = { id: "replication", label: "Replication", description: "", color: "green" };

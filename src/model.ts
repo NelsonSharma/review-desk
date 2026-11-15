@@ -35,6 +35,7 @@ export const paperSchema = z.object({
   id, title: z.string().trim().min(1, "Enter a paper title.").max(500),
   authors: z.string().max(1500), short: z.string().max(120), venue: z.string().max(500),
   year: z.number().int().min(1).max(2999).nullable(), url: safeUrl,
+  doi: z.string().trim().max(500).refine(value => !value || /^10\.\d{4,9}\/\S+$/i.test(value), "Enter a DOI such as 10.1234/example.").default(""),
   citeKey: z.string().trim().refine(value => !value || bibKey.test(value), "Use a valid BibTeX citation key."),
   bibtex: z.string().max(20000), tags: z.array(z.string().trim().min(1).max(50)).max(60),
   relation: id, values, added: z.number().int().nonnegative(),
@@ -147,7 +148,7 @@ export function newId() {
 }
 
 export function newPaper(): Paper {
-  return { id: newId(), added: Date.now(), title: "", authors: "", short: "", venue: "", year: null, url: "",
+  return { id: newId(), added: Date.now(), title: "", authors: "", short: "", venue: "", year: null, url: "", doi: "",
     citeKey: "", bibtex: "", tags: [], relation: "unassessed", values: {} };
 }
 
@@ -195,7 +196,7 @@ export function latexText(value: string) {
 export function bibliography(papers: Paper[]) {
   return papers.map(paper => {
     if (pastedKey(paper.bibtex)) return paper.bibtex.trim() + "\n";
-    const doi = paper.url.match(/^https?:\/\/(?:dx\.)?doi\.org\/(10\.\d+\/[^?#]+)$/i)?.[1] ?? "";
+    const doi = paper.doi || paper.url.match(/^https?:\/\/(?:dx\.)?doi\.org\/(10\.\d+\/[^?#]+)$/i)?.[1] || "";
     const isArticle = Boolean(doi && paper.venue);
     const fields = [
       ["title", "{" + latexText(paper.title) + "}"], ["author", latexText(paper.authors.replace(/\s*;\s*/g, " and "))],

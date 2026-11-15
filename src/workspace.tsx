@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowDownWideNarrow, ArrowLeft, ArrowRight, ArrowUpRight, BookOpen, Bookmark, Check, ChevronDown,
   ChevronLeft, ChevronRight, CircleAlert, Columns3, Download, FileText, Layers3,
@@ -8,7 +8,8 @@ import { authorLabel, bibliography, canEdit, citationKey, exportReview as export
 import { api, errorMessage } from "./client";
 import { Settings } from "./settings";
 import { Pdfs, Thread } from "./threads";
-import { ClaimForm, PaperDetails, PaperForm, ProfileForm, RelationTag, Tags } from "./review-ui";
+import { ClaimForm, PaperDetails, ProfileForm, RelationTag, Tags } from "./review-ui";
+import { PaperEditor } from "./paper-editor";
 import { Comparison, Drafts, Positioning, download } from "./review-views";
 
 const navigation = {
@@ -19,7 +20,7 @@ const navigation = {
 } as const;
 
 type View = keyof typeof navigation;
-type Dialog = { kind: "details" | "paper" | "claim"; id?: string } | { kind: "profile" } | { kind: "settings"; section?: "Fields" | "Relations" | "Tags" };
+type Dialog = { kind: "details" | "claim"; id?: string } | { kind: "profile" } | { kind: "settings"; section?: "Fields" | "Relations" | "Tags" };
 type Sort = "review" | "year" | "oldest" | "title";
 const PAGE_SIZE = 8;
 const MAX_COMPARE = 6;
@@ -34,11 +35,20 @@ export default function Workspace({ initial, initialRevision, initialInfo, user,
   const editable = canEdit(user);
   const [info, setInfo] = useState(initialInfo);
   const [review, setReview] = useState(initial);
+  const papersRef = useRef(review.papers);
+  papersRef.current = review.papers;
   const revision = useRef(initialRevision);
   const saving = useRef(false);
   const [sync, setSync] = useState<"saved" | "saving" | "error">("saved");
   const [view, setView] = useState<View>("library");
   const [dialog, setDialog] = useState<Dialog>();
+  const [editor, setEditor] = useState<string>();
+  const [paperDirty, setPaperDirty] = useState(false);
+  const paperDirtyRef = useRef(false);
+  const editorRef = useRef<string | undefined>(undefined);
+  const activeHash = useRef(window.location.hash);
+  const editorReturn = useRef({ view: "library" as View, scroll: 0 });
+  const onPaperDirty = useCallback((dirty: boolean) => { paperDirtyRef.current = dirty; setPaperDirty(dirty); }, []);
   const [selection, setSelection] = useState<string[]>([]);
 
   const [highlight, setHighlight] = useState<string>();
@@ -59,12 +69,12 @@ export default function Workspace({ initial, initialRevision, initialInfo, user,
   const relationMap = useMemo(() => new Map(review.relations.map(item => [item.id, item])), [review.relations]);
   const draftDirty = drafts.related !== review.drafts.related || drafts.contribution !== review.drafts.contribution;
   useEffect(() => {
-    onDraftDirty(draftDirty);
-    if (!draftDirty) return;
+    onDraftDirty(draftDirty || paperDirty);
+    if (!draftDirty && !paperDirty) return;
     function protectDraft(event: BeforeUnloadEvent) { event.preventDefault(); }
     window.addEventListener("beforeunload", protectDraft);
     return () => { window.removeEventListener("beforeunload", protectDraft); onDraftDirty(false); };
-  }, [draftDirty, onDraftDirty]);
+  }, [draftDirty, paperDirty, onDraftDirty]);
 
   useEffect(() => {
     if (!exportOpen) return;
@@ -81,22 +91,62 @@ export default function Workspace({ initial, initialRevision, initialInfo, user,
 
   useEffect(() => {
     function onLocation() {
-      const hash = window.location.hash.slice(1);
-      if (!hash) setView("library");
-      if (Object.hasOwn(navigation, hash)) setView(hash as View);
+      // The app owns transitions to another review or the admin page.
+      const url = new URL(window.location.href);
+      if (url.searchParams.get("review") !== initialInfo.id || url.searchParams.has("admin")) return;
+      const nextHash = window.location.hash;
+      if (nextHash === activeHash.current && editorRef.current !== undefined) return;
+      if (editorRef.current && paperDirtyRef.current && !window.confirm("Discard unsaved paper changes?")) {
+        window.history.pushState(null, "", window.location.pathname + window.location.search + activeHash.current);
+        return;
+      }
+      const hash = nextHash.slice(1);
+      const match = hash.match(/^paper\/(new|[a-zA-Z0-9_-]+)\/edit$/);
+      const id = match?.[1];
+      const valid = editable && id && (id === "new" || papersRef.current.some(paper => paper.id === id));
+      editorRef.current = valid ? id : undefined;
+      setEditor(editorRef.current); onPaperDirty(false); setDialog(undefined);
+      if (!valid) setView(Object.hasOwn(navigation, hash) ? hash as View : "library");
+      activeHash.current = nextHash;
+      window.scrollTo({ top: 0, behavior: "instant" });
     }
     onLocation();
     window.addEventListener("popstate", onLocation);
     window.addEventListener("hashchange", onLocation);
     return () => { window.removeEventListener("popstate", onLocation); window.removeEventListener("hashchange", onLocation); };
-  }, []);
+  }, [editable, initialInfo.id, onPaperDirty]);
+
+  function canLeaveEditor() {
+    return !saving.current && (!paperDirtyRef.current || window.confirm("Discard unsaved paper changes?"));
+  }
+
+  function editorLocation(hash: string, replace = false) {
+    const url = window.location.pathname + window.location.search + hash;
+    window.history[replace ? "replaceState" : "pushState"](null, "", url);
+    activeHash.current = hash;
+  }
+
+  function editPaper(id = "new") {
+    editorReturn.current = { view, scroll: window.scrollY };
+    setDialog(undefined); setExportOpen(false);
+    setEditor(id); editorRef.current = id; onPaperDirty(false);
+    editorLocation("#paper/" + id + "/edit");
+    window.scrollTo({ top: 0, behavior: "instant" });
+  }
+
+  function finishEditor() {
+    setEditor(undefined); editorRef.current = undefined; onPaperDirty(false);
+    setView(editorReturn.current.view);
+    editorLocation(editorReturn.current.view === "library" ? "" : "#" + editorReturn.current.view, true);
+    requestAnimationFrame(() => window.scrollTo({ top: editorReturn.current.scroll, behavior: "instant" }));
+  }
 
   function go(destination: View, claimId?: string) {
+    if (editorRef.current) { if (!canLeaveEditor()) return; finishEditor(); }
     setHighlight(claimId);
     setExportOpen(false);
-    if (destination !== view) {
-      const url = destination === "library" ? window.location.pathname + window.location.search : "#" + destination;
-      window.history.pushState(null, "", url);
+    if (destination !== view || editor) {
+      editorLocation(destination === "library" ? "" : "#" + destination);
       setView(destination);
       window.scrollTo({ top: 0, behavior: "instant" });
     }
@@ -128,12 +178,12 @@ export default function Workspace({ initial, initialRevision, initialInfo, user,
     }
   }
 
-  async function savePaper(paper: Paper) {
+  async function savePaper(paper: Paper, addedFields: Field[]) {
     const exists = review.papers.some(item => item.id === paper.id);
     const papers = exists ? review.papers.map(item => item.id === paper.id ? paper : item) : [...review.papers, paper];
-    const error = await persist({ ...review, papers, tags: [...new Set([...review.tags, ...paper.tags])] }, exists ? "Paper updated" : "Paper added");
+    const error = await persist({ ...review, papers, fields: [...review.fields, ...addedFields], tags: [...new Set([...review.tags, ...paper.tags])] }, exists ? "Paper updated" : "Paper added");
     if (!error) {
-      if (!exists) { clearFilters(); setSort("review"); }
+      finishEditor();
       setDialog({ kind: "details", id: paper.id });
     }
     return error;
@@ -142,7 +192,7 @@ export default function Workspace({ initial, initialRevision, initialInfo, user,
   async function removePaper(id: string) {
     const claims = review.claims.map(claim => ({ ...claim, evidence: claim.evidence.filter(link => link.paperId !== id) }));
     const error = await persist({ ...review, papers: review.papers.filter(paper => paper.id !== id), claims }, "Paper deleted");
-    if (!error) { setSelection(current => current.filter(item => item !== id)); setDialog(undefined); }
+    if (!error) { finishEditor(); setSelection(current => current.filter(item => item !== id)); setDialog(undefined); }
     return error;
   }
 
@@ -252,6 +302,7 @@ export default function Workspace({ initial, initialRevision, initialInfo, user,
 
   const selectedPapers = selection.flatMap(id => review.papers.filter(paper => paper.id === id));
   const currentPaper = dialog && "id" in dialog ? review.papers.find(paper => paper.id === dialog.id) : undefined;
+  const editingPaper = editor ? review.papers.find(paper => paper.id === editor) : undefined;
   const currentClaim = dialog?.kind === "claim" ? review.claims.find(claim => claim.id === dialog.id) : undefined;
   const openPaper = (id: string) => setDialog({ kind: "details", id });
   const closeDialog = () => setDialog(undefined);
@@ -265,7 +316,7 @@ export default function Workspace({ initial, initialRevision, initialInfo, user,
       </button>
       <nav className="side-nav" aria-label="Workspace">
         {Object.entries(navigation).map(([key, { label, icon: Icon }]) =>
-          <button key={key} type="button" onClick={() => go(key as View)} aria-current={view === key ? "page" : undefined}><Icon size={19} strokeWidth={1.75} /><span>{label}</span></button>)}
+          <button key={key} type="button" onClick={() => go(key as View)} aria-current={!editor && view === key ? "page" : undefined}><Icon size={19} strokeWidth={1.75} /><span>{label}</span></button>)}
       </nav>
       <div className="sidebar-end">
         <button className="reference-tile" type="button" onClick={() => setDialog({ kind: "profile" })}>
@@ -279,18 +330,20 @@ export default function Workspace({ initial, initialRevision, initialInfo, user,
     <div className="main-column">
       <header className="topbar workspace-bar">
         <div className="breadcrumbs"><button className="text-button back-library" type="button" onClick={onReviews}><ArrowLeft size={15} /><span>All reviews</span></button>
-          <ChevronRight size={14} /><strong>{navigation[view].label}</strong></div>
+          <ChevronRight size={14} /><strong>{editor ? (editingPaper ? "Edit paper" : "Add paper") : navigation[view].label}</strong></div>
         <div className="header-actions">
           {editable ? <div className={"sync-label " + sync} role="status">
             {sync === "error" ? <CircleAlert size={15} /> : sync === "saving" ? <span className="sync-spinner" /> : <span className="sync-dot" />}
-            <span>{sync === "saving" ? "Saving…" : sync === "error" ? "Last change unsaved" : draftDirty ? "Draft edits unsaved" : "All changes saved"}</span>
+            <span>{sync === "saving" ? "Saving…" : sync === "error" ? "Last change unsaved" : paperDirty ? "Paper edits unsaved" : draftDirty ? "Draft edits unsaved" : "All changes saved"}</span>
           </div> : <span className="membership-label">{user?.role === "commenter" ? "Commenter" : "Read only"}</span>}
           {accountControls}
         </div>
       </header>
       <main className="main-content" id="workspace-main" tabIndex={-1}>
-        {view === "library" && <>
-          <Hero info={info} onAdd={editable ? () => setDialog({ kind: "paper" }) : undefined} onCompare={() => go("compare")} />
+        {editor && editable && <PaperEditor key={editor} paper={editingPaper} fields={review.fields} relations={review.relations} savedTags={tags}
+          onClose={() => { if (canLeaveEditor()) finishEditor(); }} onSave={savePaper} onDelete={removePaper} onDirty={onPaperDirty} />}
+        {!editor && view === "library" && <>
+          <Hero info={info} onAdd={editable ? () => editPaper() : undefined} onCompare={() => go("compare")} />
           <div className="stats">
             <Stat icon={<FileText size={21} />} color="purple" number={review.papers.length} label="Papers collected" onClick={() => showRelation("")} />
             {[relationMap.get("same-problem"), relationMap.get("method-only")].filter((item): item is NonNullable<typeof item> => Boolean(item)).map((item, index) =>
@@ -352,7 +405,7 @@ export default function Workspace({ initial, initialRevision, initialInfo, user,
                   </tbody>
                 </table>
                 {!displayed.length && <div className="empty-state"><Search size={25} /><h3>{filtered ? "No matching papers" : "Your library is empty"}</h3><p>{filtered ? "Try a different search or clear the filters." : editable ? "Add a paper to start the review." : "Papers will appear here as they are added."}</p>
-                  {(filtered || editable) && <button type="button" className="button secondary compact" onClick={filtered ? clearFilters : () => setDialog({ kind: "paper" })}>{filtered ? "Clear filters" : "Add a paper"}</button>}</div>}
+                  {(filtered || editable) && <button type="button" className="button secondary compact" onClick={filtered ? clearFilters : () => editPaper()}>{filtered ? "Clear filters" : "Add a paper"}</button>}</div>}
               </div>
               {displayed.length > 0 && <footer className="table-footer">
                 <span>Showing {firstRow + 1}–{lastRow} of {displayed.length} {displayed.length === 1 ? "paper" : "papers"}{filtered && displayed.length !== review.papers.length ? " · " + review.papers.length + " total" : ""}</span>
@@ -363,23 +416,21 @@ export default function Workspace({ initial, initialRevision, initialInfo, user,
             </div>
           </section>
         </>}
-        {view === "compare" && <Comparison profile={review.profile} fields={review.fields} relations={relationMap} selected={selectedPapers} papers={review.papers} max={MAX_COMPARE} editable={editable}
+        {!editor && view === "compare" && <Comparison profile={review.profile} fields={review.fields} relations={relationMap} selected={selectedPapers} papers={review.papers} max={MAX_COMPARE} editable={editable}
           onToggle={togglePaper} onProfile={() => setDialog({ kind: "profile" })} onFields={() => setDialog({ kind: "settings", section: "Fields" })} onOpenPaper={openPaper} onLibrary={() => go("library")} />}
-        {view === "positioning" && <Positioning claims={review.claims} papers={review.papers} name={review.profile.name} highlight={highlight} editable={editable}
+        {!editor && view === "positioning" && <Positioning claims={review.claims} papers={review.papers} name={review.profile.name} highlight={highlight} editable={editable}
           onEdit={id => setDialog({ kind: "claim", id })} onAdd={() => setDialog({ kind: "claim" })} onOpenPaper={openPaper}
           onInsertClaim={insertClaim} onDrafts={() => go("drafts")} thread={id => <Thread key={id} reviewId={info.id} kind="claim" target={id} user={user} onLogin={onLogin} />} />}
-        {view === "drafts" && <Drafts active={draftTab} onTab={setDraftTab} drafts={drafts} saved={review.drafts} papers={review.papers} editable={editable} onChange={setDrafts}
+        {!editor && view === "drafts" && <Drafts active={draftTab} onTab={setDraftTab} drafts={drafts} saved={review.drafts} papers={review.papers} editable={editable} onChange={setDrafts}
           onSave={value => persist({ ...review, drafts: value }, "Drafts saved")} onNotify={notify} onBibliography={() => exportReview("bib")}
           thread={id => <Thread key={id} reviewId={info.id} kind="draft" target={id} user={user} onLogin={onLogin} />} />}
       </main>
     </div>
     {dialog?.kind === "details" && currentPaper && <PaperDetails key={currentPaper.id} paper={currentPaper} fields={review.fields} relation={relationMap.get(currentPaper.relation)!} claims={review.claims} selected={selection.includes(currentPaper.id)}
-      onEdit={editable ? () => setDialog({ kind: "paper", id: currentPaper.id }) : undefined} onToggle={() => togglePaper(currentPaper.id)} onClaim={id => { closeDialog(); go("positioning", id); }} onClose={closeDialog}>
+      onEdit={editable ? () => editPaper(currentPaper.id) : undefined} onToggle={() => togglePaper(currentPaper.id)} onClaim={id => { closeDialog(); go("positioning", id); }} onClose={closeDialog}>
       <Pdfs reviewId={info.id} paperId={currentPaper.id} user={user} publicPdfs={info.publicPdfs} />
       <Thread reviewId={info.id} kind="paper" target={currentPaper.id} user={user} onLogin={onLogin} />
     </PaperDetails>}
-    {editable && dialog?.kind === "paper" && <PaperForm key={dialog.id || "new"} paper={currentPaper} fields={review.fields} relations={review.relations} savedTags={tags}
-      onClose={() => currentPaper ? openPaper(currentPaper.id) : closeDialog()} onSave={savePaper} onDelete={removePaper} />}
     {editable && dialog?.kind === "claim" && <ClaimForm key={dialog.id || "new"} claim={currentClaim} papers={review.papers} onClose={closeDialog} onSave={saveClaim} onDelete={removeClaim} />}
     {dialog?.kind === "profile" && <ProfileForm profile={review.profile} fields={review.fields} onClose={closeDialog} onSave={editable ? saveProfile : undefined} />}
     {editable && dialog?.kind === "settings" && <Settings review={review} info={info} section={dialog.section} onInfo={saveInfo}

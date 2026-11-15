@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { z, ZodError } from "zod";
 import { blankReview, canComment, canEdit, parseImport, reviewInfoSchema, reviewSchema, userRoles } from "../src/model.ts";
 import { transaction } from "./storage.mjs";
+import { createMetadataSearch } from "./metadata.mjs";
 import { correctPassword, digest, hashPassword, passwordRule, secretToken, sessionAge, sessionToken, userName, validCsrf } from "./security.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -34,7 +35,7 @@ function userRecord(row) {
 function problem(status, message) { throw new HttpError(status, message); }
 
 export function makeApp(db, options = {}) {
-  const { staticDirectory = resolve(root, "dist"), trustProxy = false, secureCookies = false } = options;
+  const { staticDirectory = resolve(root, "dist"), trustProxy = false, secureCookies = false, metadataSearch = createMetadataSearch() } = options;
   const app = express();
   app.disable("x-powered-by");
   if (trustProxy) app.set("trust proxy", "loopback");
@@ -92,6 +93,23 @@ export function makeApp(db, options = {}) {
   });
   const json = express.json({ limit: "6mb" });
   const smallJson = express.json({ limit: "64kb" });
+
+  const metadataInput = z.object({
+    query: z.string().trim().min(3, "Enter at least three characters.").max(500),
+    sources: z.array(z.enum(["crossref", "arxiv"])).min(1, "Select a metadata source.").max(2).refine(items => new Set(items).size === items.length),
+  });
+  const metadataAttempts = new Map();
+  api.post("/metadata/search", editor, smallJson, async (req, res) => {
+    const input = metadataInput.parse(req.body);
+    const now = Date.now();
+    for (const [id, time] of metadataAttempts) if (now - time >= 3000) metadataAttempts.delete(id);
+    if (metadataAttempts.has(req.user.id)) {
+      res.set("Retry-After", "3");
+      problem(429, "Wait a few seconds before searching again.");
+    }
+    metadataAttempts.set(req.user.id, now);
+    res.json(await metadataSearch(input));
+  });
 
   api.get("/state", (req, res) => {
     res.json({
