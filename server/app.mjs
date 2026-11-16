@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { z, ZodError } from "zod";
 import { blankReview, canComment, canEdit, parseImport, reviewInfoSchema, reviewSchema, userRoles } from "../src/model.ts";
 import { transaction } from "./storage.mjs";
-import { createMetadataSearch } from "./metadata.mjs";
+import { createBibtexLookup, createMetadataSearch } from "./metadata.mjs";
 import { correctPassword, digest, hashPassword, passwordRule, secretToken, sessionAge, sessionToken, userName, validCsrf } from "./security.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -35,7 +35,7 @@ function userRecord(row) {
 function problem(status, message) { throw new HttpError(status, message); }
 
 export function makeApp(db, options = {}) {
-  const { staticDirectory = resolve(root, "dist"), trustProxy = false, secureCookies = false, metadataSearch = createMetadataSearch() } = options;
+  const { staticDirectory = resolve(root, "dist"), trustProxy = false, secureCookies = false, metadataSearch = createMetadataSearch(), bibtexLookup = createBibtexLookup() } = options;
   const app = express();
   app.disable("x-powered-by");
   if (trustProxy) app.set("trust proxy", "loopback");
@@ -109,6 +109,20 @@ export function makeApp(db, options = {}) {
     }
     metadataAttempts.set(req.user.id, now);
     res.json(await metadataSearch(input));
+  });
+
+  const bibtexInput = z.object({ doi: z.string().trim().max(500).regex(/^10\.\d{4,9}\/\S+$/i, "Enter a valid DOI.") });
+  const bibtexAttempts = new Map();
+  api.post("/metadata/bibtex", editor, smallJson, async (req, res) => {
+    const input = bibtexInput.parse(req.body);
+    const now = Date.now();
+    for (const [id, time] of bibtexAttempts) if (now - time >= 3000) bibtexAttempts.delete(id);
+    if (bibtexAttempts.has(req.user.id)) {
+      res.set("Retry-After", "3");
+      problem(429, "Wait a few seconds before fetching BibTeX again.");
+    }
+    bibtexAttempts.set(req.user.id, now);
+    res.json(await bibtexLookup(input));
   });
 
   api.get("/state", (req, res) => {

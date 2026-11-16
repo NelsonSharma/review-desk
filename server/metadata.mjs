@@ -1,6 +1,7 @@
 import { setGlobalProxyFromEnv } from 'node:http';
 import { SaxesParser } from 'saxes';
 import { doiUrl, metadataSources, normalizeDoi } from '../src/metadata.ts';
+import { pastedKey } from '../src/model.ts';
 
 // Honor standard deployment proxy settings (including NO_PROXY) on supported Node releases.
 setGlobalProxyFromEnv?.();
@@ -12,6 +13,50 @@ const safeUrl = value => {
   try { const url = new URL(value); return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password ? url.href.slice(0, 2000) : ''; }
   catch { return ''; }
 };
+
+export function createBibtexLookup({ fetch: request = globalThis.fetch, now = Date.now } = {}) {
+  const cache = new Map();
+  const pending = new Map();
+  const unavailable = warning => ({ bibtex: '', citeKey: '', source: 'crossref', warning });
+  return async ({ doi }) => {
+    const normalized = doiValue(doi);
+    if (!normalized) return unavailable('A valid DOI is needed to fetch BibTeX. You can paste an entry manually.');
+    const key = normalized.toLowerCase();
+    const saved = cache.get(key);
+    if (saved && saved.expires > now()) return saved.result;
+    if (pending.has(key)) return pending.get(key);
+    if (pending.size >= 4) return unavailable('BibTeX lookup is busy. Try selecting the paper again shortly.');
+    const task = (async () => {
+      try {
+        const url = new URL('https://api.crossref.org/works/' + encodeURIComponent(normalized) + '/transform/application/x-bibtex');
+        const response = await request(url, {
+          redirect: 'error', signal: AbortSignal.timeout(12000),
+          headers: { Accept: 'application/x-bibtex', 'User-Agent': 'ReviewDesk/1.0 (scholarly metadata lookup)' },
+        });
+        if (!response.ok) return unavailable(response.status === 429
+          ? 'Crossref rate limit reached. Try selecting the paper again later, or paste BibTeX manually.'
+          : 'Crossref could not provide BibTeX for this DOI. You can paste an entry manually.');
+        const chunks = []; let size = 0;
+        for await (const chunk of response.body) {
+          size += chunk.length;
+          if (size > 20000) throw new Error('Oversized BibTeX response');
+          chunks.push(chunk);
+        }
+        const bibtex = Buffer.concat(chunks).toString('utf8').trim();
+        const citeKey = pastedKey(bibtex);
+        if (!citeKey) throw new Error('Invalid BibTeX response');
+        const result = { bibtex, citeKey, source: 'crossref', warning: '' };
+        if (cache.size >= 100) cache.delete(cache.keys().next().value);
+        cache.set(key, { result, expires: now() + 15 * 60 * 1000 });
+        return result;
+      } catch {
+        return unavailable('BibTeX could not be fetched from Crossref. Other metadata is still available; you can paste an entry manually.');
+      }
+    })();
+    pending.set(key, task);
+    try { return await task; } finally { pending.delete(key); }
+  };
+}
 
 export function crossrefResults(body) {
   const items = Array.isArray(body?.message?.items) ? body.message.items : body?.message?.title ? [body.message] : null;

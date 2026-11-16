@@ -341,6 +341,7 @@ export default function Workspace({ initial, initialRevision, initialInfo, user,
       </header>
       <main className="main-content" id="workspace-main" tabIndex={-1}>
         {editor && editable && <PaperEditor key={editor} paper={editingPaper} fields={review.fields} relations={review.relations} savedTags={tags}
+          usedCitationKeys={review.papers.filter(paper => paper.id !== editingPaper?.id).map(citationKey)}
           onClose={() => { if (canLeaveEditor()) finishEditor(); }} onSave={savePaper} onDelete={removePaper} onDirty={onPaperDirty} />}
         {!editor && view === "library" && <>
           <Hero info={info} onAdd={editable ? () => editPaper() : undefined} onCompare={() => go("compare")} />

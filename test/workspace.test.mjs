@@ -38,9 +38,13 @@ test("SQLite workspace serves papers, PDFs, and comments with server-side role c
   const password = "test-case-password";
   db.prepare("INSERT INTO users(username,password_hash,role) VALUES (?,?,?)").run("owner", await hashPassword(password), "admin");
   const metadataRequests = [];
+  const bibtexRequests = [];
   const server = makeApp(db, { metadataSearch: async input => {
     metadataRequests.push(input);
     return { results: [], warnings: [] };
+  }, bibtexLookup: async input => {
+    bibtexRequests.push(input);
+    return { bibtex: "@article{source2026, title={Paper}}", citeKey: "source2026", source: "crossref", warning: "" };
   } }).listen(0, "127.0.0.1");
   await once(server, "listening");
   const origin = "http://127.0.0.1:" + server.address().port;
@@ -71,6 +75,7 @@ test("SQLite workspace serves papers, PDFs, and comments with server-side role c
   const visitor = client(), owner = client(), reader = client(), reviewer = client(), editor = client();
   assert.deepEqual((await visitor("/state")).result.reviews, []);
   await owner("/login", { method: "POST", data: { username: "owner", password }, originHeader: "https://external.invalid", status: 403 });
+  await visitor("/metadata/bibtex", { method: "POST", data: { doi: "10.1234/paper" }, status: 401 });
   await visitor("/metadata/search", { method: "POST", data: { query: "a paper", sources: ["crossref"] }, status: 401 });
   await owner("/login", { method: "POST", data: { username: "owner", password } });
   await owner("/metadata/search", { method: "POST", data: { query: "a paper", sources: [] }, status: 400 });
@@ -78,6 +83,12 @@ test("SQLite workspace serves papers, PDFs, and comments with server-side role c
   await owner("/metadata/search", { method: "POST", data: { query: "a paper", sources: ["crossref"] } });
   assert.deepEqual(metadataRequests, [{ query: "a paper", sources: ["crossref"] }]);
   await owner("/metadata/search", { method: "POST", data: { query: "another", sources: ["arxiv"] }, status: 429 });
+  await owner("/metadata/bibtex", { method: "POST", data: { doi: "https://evil.invalid" }, status: 400 });
+  await owner("/metadata/bibtex", { method: "POST", data: { doi: "10.1234/paper" }, token: false, status: 403 });
+  const citation = (await owner("/metadata/bibtex", { method: "POST", data: { doi: "10.1234/paper" } })).result;
+  assert.equal(citation.citeKey, "source2026");
+  assert.deepEqual(bibtexRequests, [{ doi: "10.1234/paper" }]);
+  await owner("/metadata/bibtex", { method: "POST", data: { doi: "10.1234/other" }, status: 429 });
   const created = (await owner("/reviews", { method: "POST", data: { title: "Study design", description: "Compare research methods" }, status: 201 })).result.review;
   const path = "/reviews/" + created.id;
   await visitor(path, { status: 404 });
@@ -90,6 +101,7 @@ test("SQLite workspace serves papers, PDFs, and comments with server-side role c
   await reader("/login", { method: "POST", data: { username: "viewer", password } });
   await reviewer("/login", { method: "POST", data: { username: "commenter", password } });
   await editor("/login", { method: "POST", data: { username: "editor", password } });
+  await reader("/metadata/bibtex", { method: "POST", data: { doi: "10.1234/paper" }, status: 403 });
   await reader("/metadata/search", { method: "POST", data: { query: "a paper", sources: ["crossref"] }, status: 403 });
   const { review } = (await reader(path)).result;
   const field = { id: "design", label: "Study design", description: "Describe the design", paper: true, profile: true };

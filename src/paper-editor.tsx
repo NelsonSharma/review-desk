@@ -5,8 +5,8 @@ import { Field, ErrorNotice } from "./review-ui";
 import { MetadataSearch } from "./metadata-search";
 import { normalizeDoi } from "./metadata";
 
-export function PaperEditor({ paper, fields, relations, savedTags, onClose, onSave, onDelete, onDirty }: {
-  paper?: Paper; fields: ReviewField[]; relations: Relation[]; savedTags: string[]; onClose: () => void; onSave: (paper: Paper, addedFields: ReviewField[]) => Promise<string>; onDelete: (id: string) => Promise<string>; onDirty: (dirty: boolean) => void;
+export function PaperEditor({ paper, fields, relations, savedTags, usedCitationKeys, onClose, onSave, onDelete, onDirty }: {
+  paper?: Paper; fields: ReviewField[]; relations: Relation[]; savedTags: string[]; usedCitationKeys: string[]; onClose: () => void; onSave: (paper: Paper, addedFields: ReviewField[]) => Promise<string>; onDelete: (id: string) => Promise<string>; onDirty: (dirty: boolean) => void;
 }) {
   const [initial] = useState(() => paper ?? newPaper());
   const [draft, setDraft] = useState(initial);
@@ -60,7 +60,7 @@ export function PaperEditor({ paper, fields, relations, savedTags, onClose, onSa
       <p>Find the source, review its details, and add your research notes.</p></div>
       <span className="membership-label">{dirty ? "Unsaved changes" : "Not changed"}</span>
     </header>
-    <fieldset className="metadata-lock" disabled={saving}><MetadataSearch draft={draft} editing={!!paper} onApply={value => { setDraft(value); setError(""); }} /></fieldset>
+    <fieldset className="metadata-lock" disabled={saving}><MetadataSearch draft={draft} editing={!!paper} usedCitationKeys={usedCitationKeys} onApply={value => { setDraft(value); setError(""); }} /></fieldset>
     <form className="paper-editor-form card" onSubmit={save}>
       <fieldset className="paper-editor-fields" disabled={saving}>
       <div className="form-content">

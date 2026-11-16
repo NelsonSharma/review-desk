@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createMetadataSearch, arxivResults, crossrefResults, rankResults } from '../server/metadata.mjs';
-import { applyMetadata, metadataChanges } from '../src/metadata.ts';
+import { createBibtexLookup, createMetadataSearch, arxivResults, crossrefResults, rankResults } from '../server/metadata.mjs';
+import { applyMetadata, metadataChanges, prepareBibtexImport } from '../src/metadata.ts';
 import { bibliography, blankReview, newPaper, paperSchema, reviewSchema } from '../src/model.ts';
 
 const work = {
@@ -107,4 +107,75 @@ test('old review documents remain valid and DOI survives exports and bibliograph
   const paper = paperSchema.parse({ ...old, doi: '10.1234/example', venue: 'Journal' });
   assert.match(bibliography([paper]), /doi = \{10.1234\/example\}/);
   assert.equal(paperSchema.safeParse({ ...paper, doi: 'not a doi' }).success, false);
+});
+
+test('BibTeX is fetched on demand from the fixed DOI transform endpoint, with extracted key and cache', async () => {
+  const calls = [];
+  const entry = '@article{source2026, title={A {Nested} Title}, year={2026}}';
+  const lookup = createBibtexLookup({ fetch: async (url, options) => {
+    calls.push({ url: new URL(url), options });
+    return new Response(entry);
+  } });
+  assert.equal(calls.length, 0);
+  const result = await lookup({ doi: '10.1234/example' });
+  assert.equal(result.bibtex, entry);
+  assert.equal(result.citeKey, 'source2026');
+  assert.equal(result.source, 'crossref');
+  assert.equal(result.warning, '');
+  assert.equal(calls[0].url.href, 'https://api.crossref.org/works/10.1234%2Fexample/transform/application/x-bibtex');
+  assert.equal(calls[0].options.headers.Accept, 'application/x-bibtex');
+  assert.equal(calls[0].options.redirect, 'error');
+  assert.ok(calls[0].options.signal);
+  await lookup({ doi: '10.1234/example' });
+  assert.equal(calls.length, 1);
+});
+
+test('BibTeX unavailable, invalid, oversized, and failed responses leave citation fields empty with a warning', async () => {
+  const cases = [
+    async () => new Response('', { status: 404 }),
+    async () => new Response('', { status: 429 }),
+    async () => new Response('<html>Service unavailable</html>'),
+    async () => new Response('@misc{one, title={First}} @misc{two, title={Second}}'),
+    async () => new Response('@misc{large, title={' + 'x'.repeat(20000) + '}}'),
+    async () => { throw new Error('network failure'); },
+  ];
+  for (const request of cases) {
+    const result = await createBibtexLookup({ fetch: request })({ doi: '10.1234/example' });
+    assert.equal(result.bibtex, '');
+    assert.equal(result.citeKey, '');
+    assert.ok(result.warning);
+  }
+  let requests = 0;
+  const unavailable = await createBibtexLookup({ fetch: async () => { requests += 1; } })({ doi: '' });
+  assert.equal(requests, 0);
+  assert.ok(unavailable.warning);
+});
+
+test('BibTeX cache expires and concurrent lookups for the same DOI share one request', async () => {
+  let clock = 0, count = 0, release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const lookup = createBibtexLookup({ now: () => clock, fetch: async () => {
+    count += 1; await gate; return new Response('@misc{testkey, title={A paper}}');
+  } });
+  const first = lookup({ doi: '10.1234/example' });
+  const second = lookup({ doi: '10.1234/EXAMPLE' });
+  release();
+  assert.deepEqual(await first, await second);
+  assert.equal(count, 1);
+  clock = 16 * 60 * 1000;
+  await lookup({ doi: '10.1234/example' });
+  assert.equal(count, 2);
+});
+
+test('BibTeX import keeps key and entry consistent and resolves duplicate keys without touching fields', () => {
+  const entry = '@article{source2026, title={A paper}}';
+  assert.deepEqual(prepareBibtexImport(entry, []), { bibtex: entry, citeKey: 'source2026' });
+  const collision = prepareBibtexImport(entry, ['SOURCE2026', 'source2026-2']);
+  assert.equal(collision.citeKey, 'source2026-3');
+  const paper = paperSchema.parse({ ...newPaper(), title: 'My title', ...collision });
+  assert.equal(paper.citeKey, 'source2026-3');
+  assert.match(paper.bibtex, /^@article\{source2026-3,/);
+  assert.equal(prepareBibtexImport('not BibTeX', []), null);
+  const longKey = 'x'.repeat(100);
+  assert.equal(prepareBibtexImport('@misc{' + longKey + ', title={Title}}', [longKey]).citeKey.length, 100);
 });
